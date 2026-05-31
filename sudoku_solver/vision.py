@@ -39,6 +39,21 @@ def read_image(path: str | Path) -> np.ndarray:
 
 
 def recognize(image: np.ndarray) -> RecognitionResult:
+    scale = _recognition_scale(image)
+    if scale != 1:
+        scaled = cv2.resize(
+            image,
+            None,
+            fx=scale,
+            fy=scale,
+            interpolation=cv2.INTER_CUBIC,
+        )
+        return _scale_result(_recognize_native(scaled), 1 / scale)
+
+    return _recognize_native(image)
+
+
+def _recognize_native(image: np.ndarray) -> RecognitionResult:
     board_bbox = _find_board_bbox(image)
     cell_centers = _cell_centers(board_bbox)
     templates = _extract_digit_templates(image, board_bbox)
@@ -51,6 +66,36 @@ def recognize(image: np.ndarray) -> RecognitionResult:
         digit_centers=digit_centers,
         board_bbox=board_bbox,
         confidence=confidence,
+    )
+
+
+def _recognition_scale(image: np.ndarray) -> int:
+    height, width = image.shape[:2]
+    min_side = min(height, width)
+    if min_side >= 700:
+        return 1
+    return max(1, min(4, int(np.ceil(700 / max(min_side, 1)))))
+
+
+def _scale_result(result: RecognitionResult, factor: float) -> RecognitionResult:
+    x, y, w, h = result.board_bbox
+    return RecognitionResult(
+        grid=result.grid,
+        cell_centers={
+            cell: _scale_point(point, factor)
+            for cell, point in result.cell_centers.items()
+        },
+        digit_centers={
+            digit: _scale_point(point, factor)
+            for digit, point in result.digit_centers.items()
+        },
+        board_bbox=(
+            int(round(x * factor)),
+            int(round(y * factor)),
+            int(round(w * factor)),
+            int(round(h * factor)),
+        ),
+        confidence=result.confidence,
     )
 
 
@@ -73,6 +118,10 @@ def offset_result(result: RecognitionResult, offset: Point) -> RecognitionResult
         board_bbox=(x + dx, y + dy, w, h),
         confidence=result.confidence,
     )
+
+
+def _scale_point(point: Point, factor: float) -> Point:
+    return int(round(point[0] * factor)), int(round(point[1] * factor))
 
 
 def _find_board_bbox(image: np.ndarray) -> tuple[int, int, int, int]:
@@ -154,8 +203,6 @@ def _extract_digit_templates(
             continue
 
         mask = _dark_mask(roi)
-        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
-        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
         components = _components(mask)
         candidate_components: list[tuple[int, int, int, int]] = []
         for x, y, w, h, area in components:

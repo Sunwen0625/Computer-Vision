@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ctypes
 import time
 
 import numpy as np
@@ -8,6 +9,8 @@ from .vision import Point, RecognitionResult
 
 
 def screenshot(window_title: str | None = None) -> tuple[np.ndarray, Point]:
+    _enable_dpi_awareness()
+
     try:
         import pyautogui
     except ImportError as exc:
@@ -30,7 +33,7 @@ def screenshot(window_title: str | None = None) -> tuple[np.ndarray, Point]:
         height = int(window.height)
         if width <= 0 or height <= 0:
             raise RuntimeError(f"Window has invalid size: {window_title}")
-        image = pyautogui.screenshot(region=(left, top, width, height))
+        image = _grab_window(left, top, width, height)
         offset = (left, top)
     else:
         image = pyautogui.screenshot()
@@ -40,13 +43,43 @@ def screenshot(window_title: str | None = None) -> tuple[np.ndarray, Point]:
     return rgb[:, :, ::-1].copy(), offset
 
 
+def _grab_window(left: int, top: int, width: int, height: int):
+    try:
+        from PIL import ImageGrab
+    except ImportError as exc:
+        raise RuntimeError("Pillow is required for window capture.") from exc
+
+    if _is_windows():
+        min_x, min_y = _virtual_screen_origin()
+        desktop = ImageGrab.grab(all_screens=True)
+        box = (
+            left - min_x,
+            top - min_y,
+            left - min_x + width,
+            top - min_y + height,
+        )
+        return desktop.crop(box)
+
+    return ImageGrab.grab(bbox=(left, top, left + width, top + height))
+
+
 def list_window_titles() -> list[str]:
+    _enable_dpi_awareness()
     try:
         import pygetwindow as gw
     except ImportError as exc:
         raise RuntimeError("pygetwindow is required for listing windows.") from exc
 
     return sorted({title for title in gw.getAllTitles() if title.strip()})
+
+
+def _is_windows() -> bool:
+    return hasattr(ctypes, "windll")
+
+
+def _virtual_screen_origin() -> Point:
+    user32 = ctypes.windll.user32
+    return int(user32.GetSystemMetrics(76)), int(user32.GetSystemMetrics(77))
 
 
 def fill_solution(result: RecognitionResult, solution: list[list[int]], delay: float) -> None:
@@ -71,6 +104,7 @@ def fill_solution(result: RecognitionResult, solution: list[list[int]], delay: f
 
 
 def _find_window(title_part: str):
+    _enable_dpi_awareness()
     try:
         import pygetwindow as gw
     except ImportError as exc:
@@ -89,3 +123,16 @@ def _find_window(title_part: str):
         )
 
     return max(matches, key=lambda window: window.width * window.height)
+
+
+def _enable_dpi_awareness() -> None:
+    if not _is_windows():
+        return
+
+    try:
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)
+    except Exception:
+        try:
+            ctypes.windll.user32.SetProcessDPIAware()
+        except Exception:
+            pass

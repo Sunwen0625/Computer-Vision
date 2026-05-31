@@ -52,3 +52,11 @@ def test_offset_result_translates_click_coordinates():
         result.digit_centers[1][0] + 100,
         result.digit_centers[1][1] + 200,
     )
+
+
+def test_recognizes_downscaled_window_sized_image():
+    image = read_image(ROOT / "gameOriginal.jpg")
+    resized = cv2.resize(image, (440, 1019), interpolation=cv2.INTER_CUBIC)
+    result = recognize(resized)
+
+    assert result.grid == EXPECTED_GRID
