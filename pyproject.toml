@@ -1,0 +1,21 @@
+[tool.poetry]
+name = "sudoku-screen-solver"
+version = "0.1.0"
+description = "Recognize and auto-fill Sudoku puzzles from a screen capture."
+authors = ["Codex <codex@example.com>"]
+readme = "README.md"
+packages = [{ include = "sudoku_solver" }]
+
+[tool.poetry.dependencies]
+python = "^3.11"
+numpy = "2.1.0"
+opencv-python = "4.10.0.84"
+pillow = "10.4.0"
+pyautogui = "0.9.54"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "8.3.2"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
