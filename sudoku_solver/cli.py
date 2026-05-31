@@ -4,9 +4,9 @@ import argparse
 import json
 from pathlib import Path
 
-from .automation import fill_solution, screenshot
+from .automation import fill_solution, list_window_titles, screenshot
 from .solver import SudokuError, is_valid_solution, solve
-from .vision import RecognitionError, read_image, recognize
+from .vision import RecognitionError, offset_result, read_image, recognize
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -16,16 +16,31 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--auto", action="store_true", help="click cells and digits to fill")
     parser.add_argument("--dry-run", action="store_true", help="print recognition output only")
     parser.add_argument("--image", type=Path, help="recognize from an image instead of screen")
+    parser.add_argument("--window-title", help="capture a window whose title contains this text")
+    parser.add_argument("--list-windows", action="store_true", help="print visible window titles")
     parser.add_argument("--delay", type=float, default=0.08, help="seconds between clicks")
     args = parser.parse_args(argv)
+
+    if args.list_windows:
+        for title in list_window_titles():
+            print(title)
+        return 0
 
     if args.image and args.auto and not args.dry_run:
         print("error: --auto can only click against a live screen capture, not --image.")
         return 1
+    if args.image and args.window_title:
+        print("error: --window-title cannot be used with --image.")
+        return 1
 
     try:
-        image = read_image(args.image) if args.image else screenshot()
+        if args.image:
+            image = read_image(args.image)
+            offset = (0, 0)
+        else:
+            image, offset = screenshot(args.window_title)
         result = recognize(image)
+        result = offset_result(result, offset)
         solution = solve(result.grid)
     except (RecognitionError, SudokuError, RuntimeError) as exc:
         print(f"error: {exc}")

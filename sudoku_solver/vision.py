@@ -54,6 +54,27 @@ def recognize(image: np.ndarray) -> RecognitionResult:
     )
 
 
+def offset_result(result: RecognitionResult, offset: Point) -> RecognitionResult:
+    dx, dy = offset
+    if dx == 0 and dy == 0:
+        return result
+
+    x, y, w, h = result.board_bbox
+    return RecognitionResult(
+        grid=result.grid,
+        cell_centers={
+            cell: (point[0] + dx, point[1] + dy)
+            for cell, point in result.cell_centers.items()
+        },
+        digit_centers={
+            digit: (point[0] + dx, point[1] + dy)
+            for digit, point in result.digit_centers.items()
+        },
+        board_bbox=(x + dx, y + dy, w, h),
+        confidence=result.confidence,
+    )
+
+
 def _find_board_bbox(image: np.ndarray) -> tuple[int, int, int, int]:
     hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
     yellow = cv2.inRange(hsv, np.array([12, 45, 120]), np.array([45, 255, 255]))
@@ -125,23 +146,34 @@ def _extract_digit_templates(
 ) -> list[_Template]:
     height, width = image.shape[:2]
     _, board_y, _, board_h = board_bbox
-    start_y = max(board_y + board_h + 120, int(height * 0.78))
-    roi = image[start_y:, :]
-    mask = _dark_mask(roi)
-
-    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
-    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
-    components = _components(mask)
     digit_components: list[tuple[int, int, int, int]] = []
-    for x, y, w, h, area in components:
-        if h < height * 0.025 or w < width * 0.01:
+
+    for start_y in _digit_search_starts(height, board_y, board_h):
+        roi = image[start_y:, :]
+        if roi.size == 0 or roi.shape[0] < 20:
             continue
-        if area < 60:
-            continue
-        digit_components.append((x, y + start_y, w, h))
+
+        mask = _dark_mask(roi)
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
+        components = _components(mask)
+        candidate_components: list[tuple[int, int, int, int]] = []
+        for x, y, w, h, area in components:
+            if h < height * 0.025 or w < width * 0.01:
+                continue
+            if area < 60:
+                continue
+            candidate_components.append((x, y + start_y, w, h))
+
+        if len(candidate_components) >= 9:
+            digit_components = candidate_components
+            break
 
     if len(digit_components) < 9:
-        raise RecognitionError("Could not find the bottom 1-9 digit row.")
+        raise RecognitionError(
+            "Could not find the bottom 1-9 digit row. Capture the full game "
+            "screen, including the number keyboard below the Sudoku board."
+        )
 
     # The bottom keyboard digits are the nine widest-spread dark components
     # in the lower screen area. UI labels/icons sit above them and are ignored
@@ -153,7 +185,10 @@ def _extract_digit_templates(
     if len(digit_components) > 9:
         digit_components = _spread_nine(digit_components, width)
     if len(digit_components) != 9:
-        raise RecognitionError("Expected exactly nine bottom digit templates.")
+        raise RecognitionError(
+            "Could not isolate the bottom 1-9 digit row. Capture the full game "
+            "screen with the number keyboard visible."
+        )
 
     templates: list[_Template] = []
     for digit, (x, y, w, h) in enumerate(digit_components, start=1):
@@ -167,6 +202,22 @@ def _extract_digit_templates(
             )
         )
     return templates
+
+
+def _digit_search_starts(height: int, board_y: int, board_h: int) -> list[int]:
+    starts = [
+        board_y + board_h + 40,
+        board_y + board_h + 100,
+        int(height * 0.68),
+        int(height * 0.74),
+        int(height * 0.80),
+    ]
+    valid_starts = []
+    for start in starts:
+        clamped = max(0, min(start, height - 1))
+        if clamped not in valid_starts:
+            valid_starts.append(clamped)
+    return valid_starts
 
 
 def _spread_nine(
@@ -226,6 +277,8 @@ def _recognize_grid(
 
 
 def _dark_mask(image: np.ndarray) -> np.ndarray:
+    if image.size == 0:
+        raise RecognitionError("Cannot process an empty image region.")
     hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     # Sudoku digits are neutral dark gray. Yellow highlights and light grid
