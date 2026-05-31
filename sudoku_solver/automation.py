@@ -95,6 +95,12 @@ def fill_solution(result: RecognitionResult, solution: list[list[int]], delay: f
                 continue
 
             digit = solution[row][col]
+            if digit not in result.digit_centers:
+                raise RuntimeError(
+                    f"Digit {digit} is required at row {row + 1}, col {col + 1}, "
+                    "but its bottom keyboard button is not visible."
+                )
+
             cell_x, cell_y = result.cell_centers[(row, col)]
             digit_x, digit_y = result.digit_centers[digit]
             pyautogui.click(cell_x, cell_y)

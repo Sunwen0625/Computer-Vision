@@ -60,3 +60,12 @@ def test_recognizes_downscaled_window_sized_image():
     result = recognize(resized)
 
     assert result.grid == EXPECTED_GRID
+
+
+def test_recognizes_screen_after_completed_digit_disappears():
+    result = recognize(read_image(ROOT / "Numbers disappear.jpg"))
+    solution = solve(result.grid)
+
+    assert is_valid_solution(solution)
+    assert 7 not in result.digit_centers
+    assert result.grid[0] == [1, 8, 7, 4, 6, 5, 2, 9, 3]

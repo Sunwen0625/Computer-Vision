@@ -56,8 +56,9 @@ def recognize(image: np.ndarray) -> RecognitionResult:
 def _recognize_native(image: np.ndarray) -> RecognitionResult:
     board_bbox = _find_board_bbox(image)
     cell_centers = _cell_centers(board_bbox)
-    templates = _extract_digit_templates(image, board_bbox)
-    digit_centers = {template.digit: template.center for template in templates}
+    visible_templates = _extract_digit_templates(image, board_bbox)
+    templates = _complete_templates_from_references(visible_templates)
+    digit_centers = {template.digit: template.center for template in visible_templates}
     grid, confidence = _recognize_grid(image, board_bbox, templates)
 
     return RecognitionResult(
@@ -206,17 +207,20 @@ def _extract_digit_templates(
         components = _components(mask)
         candidate_components: list[tuple[int, int, int, int]] = []
         for x, y, w, h, area in components:
+            absolute_y = y + start_y
+            if absolute_y < board_y + board_h + board_h * 0.12:
+                continue
             if h < height * 0.025 or w < width * 0.01:
                 continue
             if area < 60:
                 continue
-            candidate_components.append((x, y + start_y, w, h))
+            candidate_components.append((x, absolute_y, w, h))
 
-        if len(candidate_components) >= 9:
+        if len(candidate_components) >= 5:
             digit_components = candidate_components
             break
 
-    if len(digit_components) < 9:
+    if len(digit_components) < 1:
         raise RecognitionError(
             "Could not find the bottom 1-9 digit row. Capture the full game "
             "screen, including the number keyboard below the Sudoku board."
@@ -229,16 +233,15 @@ def _extract_digit_templates(
     low_y = np.percentile([box[1] for box in digit_components], 70)
     digit_components = [box for box in digit_components if box[1] >= low_y - 15]
     digit_components.sort(key=lambda box: box[0])
-    if len(digit_components) > 9:
-        digit_components = _spread_nine(digit_components, width)
-    if len(digit_components) != 9:
+    digit_components_by_slot = _components_by_digit_slot(digit_components, width)
+    if not digit_components_by_slot:
         raise RecognitionError(
             "Could not isolate the bottom 1-9 digit row. Capture the full game "
             "screen with the number keyboard visible."
         )
 
     templates: list[_Template] = []
-    for digit, (x, y, w, h) in enumerate(digit_components, start=1):
+    for digit, (x, y, w, h) in sorted(digit_components_by_slot.items()):
         crop = _crop_with_padding(image, x, y, w, h, pad=8)
         template = _normalize_mask(_dark_mask(crop))
         templates.append(
@@ -249,6 +252,52 @@ def _extract_digit_templates(
             )
         )
     return templates
+
+
+def _complete_templates_from_references(templates: list[_Template]) -> list[_Template]:
+    templates_by_digit = {template.digit: template for template in templates}
+    missing = set(range(1, 10)) - set(templates_by_digit)
+    if not missing:
+        return templates
+
+    for path in _reference_image_paths():
+        image = cv2.imread(str(path), cv2.IMREAD_COLOR)
+        if image is None:
+            continue
+
+        try:
+            reference_templates = _extract_digit_templates(image, _find_board_bbox(image))
+        except RecognitionError:
+            continue
+
+        for template in reference_templates:
+            if template.digit in missing:
+                templates_by_digit[template.digit] = _Template(
+                    digit=template.digit,
+                    image=template.image,
+                    center=templates_by_digit.get(template.digit, template).center,
+                )
+        missing = set(range(1, 10)) - set(templates_by_digit)
+        if not missing:
+            break
+
+    return [templates_by_digit[digit] for digit in sorted(templates_by_digit)]
+
+
+def _reference_image_paths() -> list[Path]:
+    root = Path(__file__).resolve().parents[1]
+    cwd = Path.cwd()
+    candidates = [
+        cwd / "gameOriginal.jpg",
+        cwd / "game_tap.jpg",
+        root / "gameOriginal.jpg",
+        root / "game_tap.jpg",
+    ]
+    unique: list[Path] = []
+    for path in candidates:
+        if path not in unique and path.exists():
+            unique.append(path)
+    return unique
 
 
 def _digit_search_starts(height: int, board_y: int, board_h: int) -> list[int]:
@@ -267,26 +316,27 @@ def _digit_search_starts(height: int, board_y: int, board_h: int) -> list[int]:
     return valid_starts
 
 
-def _spread_nine(
+def _components_by_digit_slot(
     components: list[tuple[int, int, int, int]], image_width: int
-) -> list[tuple[int, int, int, int]]:
+) -> dict[int, tuple[int, int, int, int]]:
     target_step = image_width / 9
-    scored = []
+    median_height = np.median([box[3] for box in components])
+    selected: dict[int, tuple[float, tuple[int, int, int, int]]] = {}
+
     for box in components:
         x, y, w, h = box
         center_x = x + w / 2
         nearest_slot = round((center_x - target_step / 2) / target_step)
-        slot_center = target_step * (nearest_slot + 0.5)
-        score = abs(center_x - slot_center) + abs(h - np.median([b[3] for b in components]))
-        scored.append((score, nearest_slot, box))
-
-    selected: dict[int, tuple[float, tuple[int, int, int, int]]] = {}
-    for score, slot, box in scored:
-        if slot < 0 or slot > 8:
+        digit = nearest_slot + 1
+        if digit < 1 or digit > 9:
             continue
-        if slot not in selected or score < selected[slot][0]:
-            selected[slot] = (score, box)
-    return [selected[slot][1] for slot in sorted(selected)][:9]
+
+        slot_center = target_step * (nearest_slot + 0.5)
+        score = abs(center_x - slot_center) + abs(h - median_height)
+        if digit not in selected or score < selected[digit][0]:
+            selected[digit] = (score, box)
+
+    return {digit: box for digit, (_, box) in selected.items()}
 
 
 def _recognize_grid(
@@ -306,7 +356,7 @@ def _recognize_grid(
             x2 = int(round(x + (col + 1) * cell_w - cell_w * 0.16))
             y2 = int(round(y + (row + 1) * cell_h - cell_h * 0.12))
             crop = image[y1:y2, x1:x2]
-            mask = _dark_mask(crop)
+            mask = _digit_mask(crop)
             density = cv2.countNonZero(mask) / max(mask.size, 1)
             if density < 0.035:
                 values.append(0)
@@ -316,7 +366,7 @@ def _recognize_grid(
             digit_mask = _largest_digit_mask(mask)
             normalized = _normalize_mask(digit_mask)
             digit, score = _match_digit(normalized, templates)
-            values.append(digit)
+            values.append(digit if score >= 0.38 else 0)
             confidence[(row, col)] = score
         grid.append(values)
 
@@ -330,7 +380,19 @@ def _dark_mask(image: np.ndarray) -> np.ndarray:
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     # Sudoku digits are neutral dark gray. Yellow highlights and light grid
     # lines are excluded by combining value and saturation checks.
-    return np.where((gray < 150) & (hsv[:, :, 1] < 90), 255, 0).astype(np.uint8)
+    return np.where((gray < 180) & (hsv[:, :, 1] < 130), 255, 0).astype(np.uint8)
+
+
+def _digit_mask(image: np.ndarray) -> np.ndarray:
+    if image.size == 0:
+        raise RecognitionError("Cannot process an empty image region.")
+    hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    dark = (gray < 150) & (hsv[:, :, 1] < 120)
+    blue = (hsv[:, :, 0] >= 85) & (hsv[:, :, 0] <= 115) & (hsv[:, :, 1] > 60) & (
+        hsv[:, :, 2] > 120
+    )
+    return np.where(dark | blue, 255, 0).astype(np.uint8)
 
 
 def _largest_digit_mask(mask: np.ndarray) -> np.ndarray:
