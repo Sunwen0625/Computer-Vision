@@ -38,6 +38,31 @@ def read_image(path: str | Path) -> np.ndarray:
     return image
 
 
+def is_wait_overlay_visible(image: np.ndarray) -> bool:
+    if image.size == 0:
+        return False
+
+    height, width = image.shape[:2]
+    hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+    green = cv2.inRange(hsv, np.array([45, 100, 120]), np.array([85, 255, 255]))
+
+    # The throttle dialog has a large bright green title pill in the central
+    # area. Small green UI controls, such as the back arrow, are outside this
+    # region and too small to pass the area threshold.
+    x1 = int(width * 0.20)
+    x2 = int(width * 0.80)
+    y1 = int(height * 0.25)
+    y2 = int(height * 0.48)
+    central_green = green[y1:y2, x1:x2]
+    green_area = cv2.countNonZero(central_green)
+    if green_area < width * height * 0.004:
+        return False
+
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    top_strip = gray[: int(height * 0.18), :]
+    return float(np.mean(top_strip)) < 190
+
+
 def recognize(image: np.ndarray) -> RecognitionResult:
     scale = _recognition_scale(image)
     if scale != 1:

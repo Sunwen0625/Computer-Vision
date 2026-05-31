@@ -5,7 +5,13 @@ import pytest
 cv2 = pytest.importorskip("cv2")
 
 from sudoku_solver.solver import is_valid_solution, solve
-from sudoku_solver.vision import RecognitionError, offset_result, read_image, recognize
+from sudoku_solver.vision import (
+    RecognitionError,
+    is_wait_overlay_visible,
+    offset_result,
+    read_image,
+    recognize,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -69,3 +75,9 @@ def test_recognizes_screen_after_completed_digit_disappears():
     assert is_valid_solution(solution)
     assert 7 not in result.digit_centers
     assert result.grid[0] == [1, 8, 7, 4, 6, 5, 2, 9, 3]
+
+
+def test_detects_wait_overlay():
+    assert is_wait_overlay_visible(read_image(ROOT / "wait a bit.jpg"))
+    assert not is_wait_overlay_visible(read_image(ROOT / "Numbers disappear.jpg"))
+    assert not is_wait_overlay_visible(read_image(ROOT / "gameOriginal.jpg"))

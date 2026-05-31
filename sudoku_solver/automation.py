@@ -5,7 +5,7 @@ import time
 
 import numpy as np
 
-from .vision import Point, RecognitionResult
+from .vision import Point, RecognitionResult, is_wait_overlay_visible
 
 
 def screenshot(window_title: str | None = None) -> tuple[np.ndarray, Point]:
@@ -82,7 +82,14 @@ def _virtual_screen_origin() -> Point:
     return int(user32.GetSystemMetrics(76)), int(user32.GetSystemMetrics(77))
 
 
-def fill_solution(result: RecognitionResult, solution: list[list[int]], delay: float) -> None:
+def fill_solution(
+    result: RecognitionResult,
+    solution: list[list[int]],
+    delay: float,
+    window_title: str | None = None,
+    wait_timeout: float = 60.0,
+    wait_poll: float = 0.5,
+) -> None:
     try:
         import pyautogui
     except ImportError as exc:
@@ -103,10 +110,29 @@ def fill_solution(result: RecognitionResult, solution: list[list[int]], delay: f
 
             cell_x, cell_y = result.cell_centers[(row, col)]
             digit_x, digit_y = result.digit_centers[digit]
+            wait_until_ready(window_title, timeout=wait_timeout, poll=wait_poll)
             pyautogui.click(cell_x, cell_y)
             time.sleep(delay)
+            wait_until_ready(window_title, timeout=wait_timeout, poll=wait_poll)
             pyautogui.click(digit_x, digit_y)
             time.sleep(delay)
+
+
+def wait_until_ready(
+    window_title: str | None = None,
+    timeout: float = 60.0,
+    poll: float = 0.5,
+) -> None:
+    deadline = time.monotonic() + max(timeout, 0.0)
+    interval = max(poll, 0.05)
+
+    while True:
+        image, _ = screenshot(window_title)
+        if not is_wait_overlay_visible(image):
+            return
+        if time.monotonic() >= deadline:
+            raise RuntimeError("Wait overlay did not disappear before timeout.")
+        time.sleep(interval)
 
 
 def _find_window(title_part: str):

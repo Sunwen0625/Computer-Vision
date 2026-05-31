@@ -19,6 +19,18 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--window-title", help="capture a window whose title contains this text")
     parser.add_argument("--list-windows", action="store_true", help="print visible window titles")
     parser.add_argument("--delay", type=float, default=0.08, help="seconds between clicks")
+    parser.add_argument(
+        "--wait-timeout",
+        type=float,
+        default=60.0,
+        help="max seconds to wait for the anti-fast-click overlay to disappear",
+    )
+    parser.add_argument(
+        "--wait-poll",
+        type=float,
+        default=0.5,
+        help="seconds between overlay checks while waiting",
+    )
     args = parser.parse_args(argv)
 
     if args.list_windows:
@@ -53,7 +65,14 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     if args.auto and not args.dry_run:
-        fill_solution(result, solution, max(args.delay, 0.0))
+        fill_solution(
+            result,
+            solution,
+            max(args.delay, 0.0),
+            window_title=args.window_title,
+            wait_timeout=args.wait_timeout,
+            wait_poll=args.wait_poll,
+        )
     elif not args.dry_run:
         print("No clicks performed. Pass --auto to fill, or --dry-run to inspect only.")
 
